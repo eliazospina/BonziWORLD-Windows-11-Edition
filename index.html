@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>BonziWORLD Windows 11 Edition</title>
+<style>
+body{margin:0;font-family:Segoe UI, sans-serif;background:url("https://i.pinimg.com/736x/2a/90/e5/2a90e59e72743405fa0b0e525b34f5d2.jpg");background-size:cover;height:100vh;overflow:hidden;}
+#loginScreen{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);display:flex;flex-direction:column;justify-content:center;align-items:center;color:white;}
+#loginScreen input{padding:8px;margin:5px;border-radius:6px;border:none;width:200px;}
+#loginScreen button{padding:10px 20px;margin-top:10px;border:none;border-radius:6px;background:#7b2cff;color:white;cursor:pointer;}
+#loginScreen button:hover{background:#9c49ff;}
+.character{position:absolute;width:120px;text-align:center;cursor:grab;}
+.character img{width:90px;}
+.bubble{background:white;color:black;padding:5px 8px;border-radius:10px;font-size:14px;position:absolute;top:-32px;left:50%;transform:translateX(-50%);pointer-events:none;}
+#chatbar{position:absolute;bottom:0;width:100%;background:rgba(255,255,255,0.8);padding:8px;display:flex;justify-content:center;align-items:center;gap:10px;border-top-left-radius:15px;border-top-right-radius:15px;}
+#msg{flex:1;padding:8px;border:1px solid #aaa;border-radius:6px;}
+#send,#makeChar{width:40px;height:40px;border:none;background:#7b2cff;color:white;font-size:22px;cursor:pointer;border-radius:50%;}
+#send:hover,#makeChar:hover{background:#9c49ff;}
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="loginScreen">
+<h1>BonziWORLD</h1>
+<input id="nickname" placeholder="Enter nickname">
+<input id="room" placeholder="Enter room ID">
+<button id="enterRoom">Enter</button>
+</div>
+
+<!-- Game -->
+<div id="game" style="display:none;">
+<div id="characters"></div>
+
+<!-- Taskbar -->
+<div id="chatbar">
+<input id="msg" placeholder="Message">
+<button id="send">⊞</button>
+<button id="makeChar">✚</button>
+<input type="file" id="filePicker" accept="image/*" style="display:none">
+</div>
+</div>
+
+<!-- Socket.IO CDN -->
+<script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+<script>
+const socket = io(); // connect to server
+let nickname, room;
+let players = {}; // store character elements
+
+// Login
+document.getElementById("enterRoom").onclick=()=>{
+  nickname = document.getElementById("nickname").value || "Player";
+  room = document.getElementById("room").value || "Room1";
+  document.getElementById("loginScreen").style.display="none";
+  document.getElementById("game").style.display="block";
+  createPlayer(socket.id, nickname);
+  socket.emit("joinRoom",{nickname,room});
+};
+
+// Create character
+function createPlayer(id,name,imgURL,left="45%",top="40%"){
+  if(players[id]) return players[id];
+  const div=document.createElement("div");
+  div.className="character";
+  div.id=id;
+  const bubble=document.createElement("div");
+  bubble.className="bubble";
+  div.appendChild(bubble);
+  const img=document.createElement("img");
+  img.src=imgURL||"https://upload.wikimedia.org/wikipedia/en/d/d8/Windows_11_Clippy_paperclip_emoji.png";
+  div.appendChild(img);
+  div.style.left=left;
+  div.style.top=top;
+  document.getElementById("characters").appendChild(div);
+  players[id]=div;
+  if(id===socket.id) makeDraggable(div);
+  return div;
+}
+
+// Draggable
+function makeDraggable(el){
+  let drag=false,oX,oY;
+  el.addEventListener("mousedown",e=>{drag=true;oX=e.offsetX;oY=e.offsetY;});
+  document.addEventListener("mousemove",e=>{
+    if(!drag) return;
+    el.style.left=e.pageX-oX+"px";
+    el.style.top=e.pageY-oY+"px"; 
+    socket.emit("move",{id:socket.id,left:el.style.left,top:el.style.top});
+
+    // Keep bubble following
+    const bubble = el.querySelector(".bubble");
+    if(bubble && bubble.innerText!=="") bubble.style.left="50%";
+  });
+  document.addEventListener("mouseup",()=>drag=false);
+}
+
+// Send chat with bubble + TTS
+function sendMessage(){
+  const text=document.getElementById("msg").value;
+  if(!text) return;
+
+  const p = players[socket.id];
+  const bubble = p.querySelector(".bubble");
+  bubble.innerText = nickname + ": " + text;
+
+  // Text-to-speech
+  const speech = new SpeechSynthesisUtterance(text);
+  speech.rate = 1;
+  speech.pitch = 1.2;
+  speechSynthesis.speak(speech);
+
+  setTimeout(()=>bubble.innerText="",4000);
+
+  socket.emit("chat",{id:socket.id,nickname,text});
+  document.getElementById("msg").value="";
+}
+document.getElementById("send").onclick=sendMessage;
+document.getElementById("msg").addEventListener("keypress",e=>{if(e.key==="Enter")sendMessage();});
+
+// Change image
+document.getElementById("makeChar").onclick=()=>document.getElementById("filePicker").click();
+document.getElementById("filePicker").addEventListener("change",e=>{
+  const file=e.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=()=>{document.querySelector("#"+socket.id+" img").src=reader.result;
+    socket.emit("changeImage",{id:socket.id,img:reader.result});
+  };
+  reader.readAsDataURL(file);
+});
+
+// Socket events
+socket.on("playerMoved",({id,left,top})=>{
+  const p=players[id]||createPlayer(id,"Guest");
+  p.style.left=left;
+  p.style.top=top;
+});
+socket.on("playerChat",({id,nickname,text})=>{
+  if(id===socket.id) return; // already handled
+  const p=players[id]; if(!p) return;
+  const bubble=p.querySelector(".bubble");
+  bubble.innerText = nickname+": "+text;
+  setTimeout(()=>bubble.innerText="",4000);
+
+  // TTS for other players
+  const speech = new SpeechSynthesisUtterance(text);
+  speech.rate = 1;
+  speech.pitch = 1.2;
+  speechSynthesis.speak(speech);
+});
+socket.on("playerImageChanged",({id,img})=>{
+  const p=players[id]; if(!p) return;
+  p.querySelector("img").src=img;
+});
+socket.on("playerLeft",(id)=>{
+  const p=players[id]; if(!p) return;
+  p.remove(); delete players[id];
+});
+</script>
+</body>
+</html>
